@@ -6,14 +6,26 @@ def sohbete_katil(user_id, chat_id):
     r.sadd(f"aktif_sohbetler:{user_id}", chat_id)
     r.sadd("aktif_kullanicilar", user_id)
 
+#mesaj_bırak:
+#Kullanıcının bağlantı durumuna göre mesajı offline olarak Redis'e kaydeder.
+#Eğer kullanıcı online ise False döner (P2P ile iletilmeli anlamına gelir).
+#Offline ise mesajı Redis kuyruğuna ekler ve True döner.
+
 def mesaj_birak(alici_id, gonderen_id, icerik):
-    key = f"offline_mesajlar:{alici_id}"
+    if r.get(f"baglantida_mi:{alici_id}") == b'true':
+        return False  # Kullanıcı çevrimiçi, P2P üzerinden iletilmeli
+
     mesaj = {
-        "from": gonderen_id,
-        "content": icerik,
-        "timestamp": time.time()
+        "gonderen": gonderen_id,
+        "icerik": icerik,
+        "timestamp": time.time(),
+        "read_by": []  # Okuyan kullanıcılar listesi
     }
+
+    key = f"offline_mesajlar:{alici_id}"
     r.rpush(key, json.dumps(mesaj))
+    return True  # Mesaj offline olarak bırakıldı
+
 
 def mesajlari_oku(chat_id, okuyan_id):
     key = f"sohbet:{chat_id}"
@@ -34,10 +46,10 @@ def mesajlari_oku(chat_id, okuyan_id):
 
 mesajlar = mesajlari_oku("chat123", "user99")
 for m in mesajlar:
-    if "user99" in m["read_by"]:
-        print("OKUNDU ✓")
-    else:
-        print("GÖNDERİLDİ ✓")
+        if "user99" in m["read_by"]:
+                    print("OKUNDU ✓")
+        else:
+                    print("GÖNDERİLDİ ✓")
 
 
 
@@ -46,20 +58,6 @@ def sohbetten_cik(user_id, chat_id):
     r.srem(f"sohbet_katilim:{chat_id}", user_id)
     if r.scard(f"sohbet_katilim:{chat_id}") == 0:
         r.delete(f"sohbet:{chat_id}")
-
-
-def mesaj_birak(hedef_id, gonderen_id, icerik):
-    if r.get(f"baglantida_mi:{hedef_id}") == b'true':
-        return False  # P2P üzerinden ilet
-
-    mesaj = {
-        "gonderen": gonderen_id,
-        "icerik": icerik,
-        "read_by": []  # okundu bilgisi burada da olsun
-    }
-    r.rpush(f"offline_mesajlar:{hedef_id}", json.dumps(mesaj))
-    return True
-
 
 def offline_mesajlari_getir(user_id):
     key = f"offline_mesajlar:{user_id}"
