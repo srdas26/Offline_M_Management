@@ -1,4 +1,6 @@
-import redis ,json ,time
+import redis
+import msgpack
+import time
 
 r = redis.Redis(host='localhost', port=6379, db=0)
 
@@ -23,7 +25,7 @@ def mesaj_birak(alici_id, gonderen_id, icerik):
     }
 
     key = f"offline_mesajlar:{alici_id}"
-    r.rpush(key, json.dumps(mesaj))
+    r.rpush(key, msgpack.packb(mesaj, use_bin_type=True))
     return True  # Mesaj offline olarak bırakıldı
 
 
@@ -33,23 +35,23 @@ def mesajlari_oku(chat_id, okuyan_id):
     guncellenen = []
 
     for m in mesajlar:
-        mesaj = json.loads(m)
+        mesaj = msgpack.unpackb(m, raw=False)
         if okuyan_id != mesaj["gonderen"] and okuyan_id not in mesaj.get("read_by", []):
             mesaj["read_by"].append(okuyan_id)
-        guncellenen.append(json.dumps(mesaj))
-
+        guncellenen.append(msgpack.packb(mesaj, use_bin_type=True))
+    
     # Mesajları güncelle (küçük sohbetler için yeterli)
     r.delete(key)
     r.rpush(key, *guncellenen)
 
-    return [json.loads(m) for m in guncellenen]
+    return [msgpack.unpackb(m, raw=False) for m in guncellenen]
 
-mesajlar = mesajlari_oku("chat123", "user99")
-for m in mesajlar:
-        if "user99" in m["read_by"]:
-                    print("OKUNDU ✓")
-        else:
-                    print("GÖNDERİLDİ ✓")
+# mesajlar = mesajlari_oku("chat123", "user99")
+# for m in mesajlar:
+#         if "user99" in m["read_by"]:
+#                     print("OKUNDU ✓")
+#         else:
+#                     print("GÖNDERİLDİ ✓")
 
 
 
@@ -63,7 +65,7 @@ def offline_mesajlari_getir(user_id):
     key = f"offline_mesajlar:{user_id}"
     mesajlar = r.lrange(key, 0, -1)
     r.delete(key)  # alındıktan sonra temizle
-    return [json.loads(m) for m in mesajlar]
+    return [msgpack.unpackb(m, raw=False) for m in mesajlar]
 
 
 def kullanici_baglandi(user_id):
@@ -73,6 +75,7 @@ def kullanici_kapatti(user_id):
     r.set(f"baglantida_mi:{user_id}", "false")
 
 #nah I'd win 
+#know your place
 
 def mesajlari_sil(chat_id):
     r.delete(f"sohbet:{chat_id}")
