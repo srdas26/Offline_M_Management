@@ -1,0 +1,29 @@
+plugins {
+    id 'java'
+}
+
+group = 'org.example'
+version = '1.0-SNAPSHOT'
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    testImplementation platform('org.junit:junit-bom:5.10.0')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    // https://mvnrepository.com/artifact/redis.clients/jedis
+    implementation 'redis.clients:jedis:6.1.0'
+    // https://mvnrepository.com/artifact/org.msgpack/jackson-dataformat-msgpack
+    implementation 'org.msgpack:jackson-dataformat-msgpack:0.9.10'
+    // https://mvnrepository.com/artifact/com.fasterxml.jackson.core/jackson-databind
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.20.0-rc1'
+    // https://mvnrepository.com/artifact/org.junit.jupiter/junit-jupiter-api
+    //test icin
+    testImplementation 'org.junit.jupiter:junit-jupiter-api:6.0.0-M2'
+}
+
+test {
+    useJUnitPlatform()
+}
