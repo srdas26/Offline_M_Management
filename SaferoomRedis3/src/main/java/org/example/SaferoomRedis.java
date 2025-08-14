@@ -3,14 +3,17 @@ package org.example;
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPool;
 import redis.clients.jedis.JedisPoolConfig;
-import redis.clients.jedis.Pipeline;
 import redis.clients.jedis.params.XAddParams;
 import redis.clients.jedis.resps.StreamEntry;
 import redis.clients.jedis.params.XReadParams;
 import redis.clients.jedis.StreamEntryID;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import org.msgpack.jackson.dataformat.MessagePackFactory;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
 import java.util.*;
@@ -18,7 +21,8 @@ import java.util.*;
 public class SaferoomRedis {
 
     private final JedisPool pool;
-    private final ObjectMapper msgpack;
+
+    private static final Logger logger = LoggerFactory.getLogger(SaferoomRedis.class);
 
     // Redis key yönetimi
     private static class Key {
@@ -36,7 +40,7 @@ public class SaferoomRedis {
         poolConfig.setMaxTotal(50);
         poolConfig.setMaxIdle(20);
         this.pool = new JedisPool(poolConfig, host, port);
-        this.msgpack = new ObjectMapper(new MessagePackFactory());
+
     }
 
     /* ------------- Kullanıcı durumu ------------- */
@@ -112,7 +116,7 @@ public class SaferoomRedis {
             }
 
             List<Map<String, String>> messages = new ArrayList<>();
-            for (StreamEntry entry : streamResult.get(0).getValue()) {
+            for (StreamEntry entry : streamResult.getFirst().getValue()) {
                 Map<String, String> msg = new HashMap<>(entry.getFields());
                 msg.put("id", entry.getID().toString());
                 messages.add(msg);
@@ -180,23 +184,22 @@ public class SaferoomRedis {
 
     /* ------------- Otomatik Temizlik Thread (SCAN ile) ------------- */
 
+
     public void startAutoCleanupTask() {
-        long oneDayMillis = 24 * 60 * 60 * 1000L;
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 
-        Thread cleanupThread = new Thread(() -> {
-            while (true) {
-                try {
-                    cleanupOldOfflineMessagesScan();
-                    Thread.sleep(oneDayMillis);
-                } catch (Exception e) {
-                    e.printStackTrace();
-                }
+        Runnable cleanupTask = () -> {
+            try {
+                cleanupOldOfflineMessagesScan();
+            } catch (Exception e) {
+                logger.error("Temizlik sırasında hata oluştu", e);
             }
-        });
+        };
 
-        cleanupThread.setDaemon(true);
-        cleanupThread.start();
+        // Sunucu açılır açılmaz başlat, 24 saatte bir tekrar et
+        scheduler.scheduleAtFixedRate(cleanupTask, 0, 24, TimeUnit.HOURS);
     }
+
 
     public void cleanupOldOfflineMessagesScan() {
         long oneWeekMillis = 7 * 24 * 60 * 60 * 1000L;
@@ -234,7 +237,7 @@ public class SaferoomRedis {
         // Sunucu açılır açılmaz otomatik temizlik thread’i başlasın
         redis.startAutoCleanupTask();
 
-    
+
     }
 
 }
