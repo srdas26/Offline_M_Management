@@ -21,7 +21,7 @@ import java.util.*;
 public class SaferoomRedis {
 
     private final JedisPool pool;
-
+    private ScheduledExecutorService scheduler;
     private static final Logger logger = LoggerFactory.getLogger(SaferoomRedis.class);
 
     // Redis key yönetimi
@@ -186,7 +186,7 @@ public class SaferoomRedis {
 
 
     public void startAutoCleanupTask() {
-        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+        scheduler = Executors.newSingleThreadScheduledExecutor();
 
         Runnable cleanupTask = () -> {
             try {
@@ -196,9 +196,22 @@ public class SaferoomRedis {
             }
         };
 
-        // Sunucu açılır açılmaz başlat, 24 saatte bir tekrar et
         scheduler.scheduleAtFixedRate(cleanupTask, 0, 24, TimeUnit.HOURS);
+
+        // JVM kapanırken scheduler'ı düzgün kapat
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            scheduler.shutdown();
+            try {
+                if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
+                    scheduler.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                scheduler.shutdownNow();
+            }
+        }));
     }
+
+
 
 
     public void cleanupOldOfflineMessagesScan() {

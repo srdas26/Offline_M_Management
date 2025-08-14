@@ -22,6 +22,10 @@ dependencies {
     // https://mvnrepository.com/artifact/org.junit.jupiter/junit-jupiter-api
     //test icin
     testImplementation 'org.junit.jupiter:junit-jupiter-api:6.0.0-M2'
+    implementation 'ch.qos.logback:logback-classic:1.5.13'
+    implementation 'ch.qos.logback:logback-core:1.5.13'
+    implementation 'org.slf4j:slf4j-api:2.0.17'
+
 }
 
 test {
