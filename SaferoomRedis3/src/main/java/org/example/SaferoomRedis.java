@@ -7,18 +7,13 @@ import redis.clients.jedis.Pipeline;
 import redis.clients.jedis.params.XAddParams;
 import redis.clients.jedis.resps.StreamEntry;
 import redis.clients.jedis.params.XReadParams;
+import redis.clients.jedis.StreamEntryID;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.msgpack.jackson.dataformat.MessagePackFactory;
 
-import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.*;
-import java.util.stream.Collectors;
-import redis.clients.jedis.StreamEntryID;
-
-
-
 
 public class SaferoomRedis {
 
@@ -31,10 +26,9 @@ public class SaferoomRedis {
         static String chatParticipants(String chatId) { return "chat:" + chatId + ":participants"; }
         static String activeUsers() { return "users:active"; }
         static String userConnectionStatus(String userId) { return "user:" + userId + ":is_online"; }
-
-        // Offline mesaj stream key
         static String offlineChatStream(String userId) { return "offline_chat_stream:" + userId; }
         static String chatStream(String chatId) { return "chat:" + chatId + ":stream"; }
+        static String maintenanceLastCleanup() { return "maintenance:last_cleanup"; }
     }
 
     public SaferoomRedis(String host, int port) {
@@ -57,13 +51,11 @@ public class SaferoomRedis {
 
     public void sohbettenCik(String userId, String chatId) {
         try (Jedis jedis = pool.getResource()) {
-            // Pipeline ile aktif chat ve participants temizle
             var pipe = jedis.pipelined();
             pipe.srem(Key.userActiveChats(userId), chatId);
             pipe.srem(Key.chatParticipants(chatId), userId);
             pipe.sync();
 
-            // Eğer chat boşsa, ilgili stream ve participants key’lerini sil
             if (jedis.scard(Key.chatParticipants(chatId)) == 0) {
                 var cleanupPipe = jedis.pipelined();
                 cleanupPipe.del(Key.chatStream(chatId));
@@ -90,11 +82,9 @@ public class SaferoomRedis {
         try (Jedis jedis = pool.getResource()) {
             String online = jedis.get(Key.userConnectionStatus(receiverId));
             if ("true".equals(online)) {
-                // Online: P2P iletilecek
                 return false;
             }
 
-            // Offline: Redis'e kaydet
             Map<String, String> message = new HashMap<>();
             message.put("sender_id", senderId);
             message.put("content", content);
@@ -105,14 +95,15 @@ public class SaferoomRedis {
         }
     }
 
-
-    /* ------------- Offline mesajları gösterme (kullanıcı sohbete girdiğinde) ------------- */
+    /* ------------- Offline mesajları gösterme ------------- */
     public List<Map<String, String>> offlineMesajlariGetir(String receiverId) {
         try (Jedis jedis = pool.getResource()) {
+
+            runCleanupIfDue(jedis, receiverId);
+
             Map<String, StreamEntryID> streams = new HashMap<>();
             streams.put(Key.offlineChatStream(receiverId), new StreamEntryID("0-0"));
 
-            // XReadParams ile doğru kullanım
             List<Map.Entry<String, List<StreamEntry>>> streamResult =
                     jedis.xread(XReadParams.xReadParams().count(500).block(0), streams);
 
@@ -129,26 +120,121 @@ public class SaferoomRedis {
             return messages;
         }
     }
-    /* ----------------- Mesaj okundu ve silme ----------------- */
+
     public void mesajOkundu(String receiverId, String messageId) {
         try (Jedis jedis = pool.getResource()) {
             jedis.xdel(Key.offlineChatStream(receiverId), new StreamEntryID(messageId));
         }
     }
 
-
-
-    /* ------------- Kullanıcı mesajı okuduğunda silme ------------- */
     public void offlineMesajOkundu(String receiverId, String messageId) {
         try (Jedis jedis = pool.getResource()) {
             jedis.xdel(Key.offlineChatStream(receiverId), new StreamEntryID(messageId));
         }
     }
 
-    /* ------------- Sohbetten mesajları temizleme (mesajları tamamen silmek için) ------------- */
     public void mesajlariSil(String userId) {
         try (Jedis jedis = pool.getResource()) {
             jedis.del(Key.offlineChatStream(userId));
         }
     }
+
+    /* ------------- Haftalık Temizlik ------------- */
+
+    private void runCleanupIfDue(Jedis jedis, String userId) {
+        long cleanupInterval = 24 * 60 * 60 * 1000L; // 24 saat
+        long now = System.currentTimeMillis();
+
+        String lastCleanupStr = jedis.hget(Key.maintenanceLastCleanup(), userId);
+        long lastCleanup = (lastCleanupStr != null) ? Long.parseLong(lastCleanupStr) : 0;
+
+        if ((now - lastCleanup) > cleanupInterval) {
+            runWeeklyUnreadMessageCleanup(userId);
+
+            jedis.hset(Key.maintenanceLastCleanup(), userId, String.valueOf(now));
+        }
+    }
+
+    public void runWeeklyUnreadMessageCleanup(String userId) {
+        long oneWeek = 7 * 24 * 60 * 60 * 1000L;
+        long cutoffTimestamp = System.currentTimeMillis() - oneWeek;
+
+        try (Jedis jedis = pool.getResource()) {
+            String streamKey = Key.offlineChatStream(userId);
+
+            StreamEntryID startRange = new StreamEntryID("-");
+            StreamEntryID endRange = new StreamEntryID(cutoffTimestamp + "-0");
+
+            List<StreamEntry> oldMessages = jedis.xrange(streamKey, startRange, endRange);
+            if (oldMessages == null || oldMessages.isEmpty()) return;
+
+            StreamEntryID[] idsToDelete = oldMessages.stream()
+                    .map(StreamEntry::getID)
+                    .toArray(StreamEntryID[]::new);
+
+            if (idsToDelete.length > 0) {
+                jedis.xdel(streamKey, idsToDelete);
+            }
+        }
+    }
+
+    /* ------------- Otomatik Temizlik Thread (SCAN ile) ------------- */
+
+    public void startAutoCleanupTask() {
+        long oneDayMillis = 24 * 60 * 60 * 1000L;
+
+        Thread cleanupThread = new Thread(() -> {
+            while (true) {
+                try {
+                    cleanupOldOfflineMessagesScan();
+                    Thread.sleep(oneDayMillis);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            }
+        });
+
+        cleanupThread.setDaemon(true);
+        cleanupThread.start();
+    }
+
+    public void cleanupOldOfflineMessagesScan() {
+        long oneWeekMillis = 7 * 24 * 60 * 60 * 1000L;
+        long cutoffTimestamp = System.currentTimeMillis() - oneWeekMillis;
+
+        try (Jedis jedis = pool.getResource()) {
+            String cursor = "0";
+
+            do {
+                var scanResult = jedis.scan(cursor, new redis.clients.jedis.params.ScanParams()
+                        .match("offline_chat_stream:*")
+                        .count(100));
+                cursor = scanResult.getCursor();
+
+                for (String streamKey : scanResult.getResult()) {
+                    StreamEntryID startRange = new StreamEntryID("-");
+                    StreamEntryID endRange = new StreamEntryID(cutoffTimestamp + "-0");
+
+                    List<StreamEntry> oldMessages = jedis.xrange(streamKey, startRange, endRange);
+
+                    if (oldMessages != null && !oldMessages.isEmpty()) {
+                        StreamEntryID[] idsToDelete = oldMessages.stream()
+                                .map(StreamEntry::getID)
+                                .toArray(StreamEntryID[]::new);
+
+                        jedis.xdel(streamKey, idsToDelete);
+                    }
+                }
+            } while (!cursor.equals("0"));
+        }
+    }
+    public static void main(String[] args) {
+        SaferoomRedis redis = new SaferoomRedis("localhost", 6379);
+
+        // Sunucu açılır açılmaz otomatik temizlik thread’i başlasın
+        redis.startAutoCleanupTask();
+
+    
+    }
+
 }
