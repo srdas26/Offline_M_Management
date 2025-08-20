@@ -17,8 +17,11 @@ public class OfflineFileService {
 
     // Buraya kendi Connection yönetimini koy
     private Connection getConnection() throws SQLException {
-        // Örn: DriverManager.getConnection(url, user, pass);
-        return null;
+        String dbUrl = "jdbc:mysql://localhost:3306/chat_files";
+        String user = "root"; // <-- Change this
+        String password = "root"; // <-- Change this
+
+        return DriverManager.getConnection(dbUrl, user, password);
     }
 
     public long storeOfflineFile(
