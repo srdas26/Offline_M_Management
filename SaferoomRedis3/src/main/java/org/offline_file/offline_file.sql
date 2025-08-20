@@ -55,7 +55,7 @@ START TRANSACTION;
   SET status = 2  -- delivered
   WHERE id = ? AND status = 1;
 
---görüldü bilgisi
+-- görüldü bilgisi
   UPDATE offline_recipients
   SET status = 3  -- seen
   WHERE id = ? AND status IN (1,2);
